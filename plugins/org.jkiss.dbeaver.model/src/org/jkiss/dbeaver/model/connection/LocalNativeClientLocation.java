@@ -27,10 +27,24 @@ import java.io.File;
 public class LocalNativeClientLocation implements DBPNativeClientLocation {
     private final String id;
     private final File path;
+    private final String displayName;
+
+    private LocalNativeClientLocation(String id, File path, String displayName) {
+        this.id = id;
+        this.path = path;
+        this.displayName = displayName;
+    }
+
+    public LocalNativeClientLocation(String id, String path, String displayName) {
+        this(id, new File(path != null ? path : id), displayName);
+    }
+
+    public LocalNativeClientLocation(String id, @NotNull File path) {
+        this(id, path, path.getAbsolutePath());
+    }
 
     public LocalNativeClientLocation(String id, String path) {
-        this.id = id;
-        this.path = new File(path != null ? path : id);
+        this(id, new File(path != null ? path : id));
     }
 
     @NotNull
@@ -48,7 +62,7 @@ public class LocalNativeClientLocation implements DBPNativeClientLocation {
     @NotNull
     @Override
     public String getDisplayName() {
-        return path.getAbsolutePath();
+        return displayName;
     }
 
     @Override

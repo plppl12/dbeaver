@@ -189,49 +189,36 @@ public class PostgreDataSourceProvider extends JDBCDataSourceProvider implements
             } catch (Throwable e) {
                 log.warn("Error reading Windows registry", e);
             }
-        }
-
-        // Unix
-        Collection<String> foldersToExamine = new ArrayList<>();
-        foldersToExamine.add("/usr/bin");
-        foldersToExamine.add("/usr/local/bin");
-        if (RuntimeUtils.isLinux()) {
-            foldersToExamine.add("/etc/alternatives");
-        } else if (RuntimeUtils.isMacOS()) {
+        } else {
+            // Unix
+            Collection<String> foldersToExamine = NativeClientLocationUtils.unixFoldersToExamine();
             foldersToExamine.add("/Library/PostgreSQL"); //standard location for EDB installer
             foldersToExamine.add("/Applications/Postgres.app/Contents/versions");
-            if (RuntimeUtils.isOSArchAMD64()) {
-                foldersToExamine.add(NativeClientLocationUtils.HOMEBREW_FORMULAE_LOCATION);
-            } else if (RuntimeUtils.isOSArchAArch64()) {
-                foldersToExamine.add("/opt/homebrew/bin");
-                foldersToExamine.add("/opt/homebrew/Cellar");
-                foldersToExamine.add("/opt/homebrew/opt");
-            }
-        }
-
-        for (String folder : foldersToExamine) {
-            Path folderPath = Path.of(folder);
-            if (Files.notExists(folderPath)) {
-                continue;
-            }
-            try {
-                Files.walkFileTree(folderPath, new SimpleFileVisitor<>() {
-                    @Override
-                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                        if (!file.endsWith("bin/psql")) {
-                            return FileVisitResult.CONTINUE;
-                        }
-                        if (file.toFile().canExecute()) {
-                            Path grandparent = IOUtils.getGrandparent(file);
-                            if (grandparent != null) {
-                                localClients.add(new PostgreServerHome(grandparent.toAbsolutePath().toString()));
+            for (String folder : foldersToExamine) {
+                Path folderPath = Path.of(folder);
+                if (Files.notExists(folderPath)) {
+                    continue;
+                }
+                try {
+                    Files.walkFileTree(folderPath, new SimpleFileVisitor<>() {
+                        @Override
+                        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                            if (!file.endsWith("bin/psql")) {
+                                return FileVisitResult.CONTINUE;
                             }
+                            if (file.toFile().canExecute()) {
+                                Path grandparent = IOUtils.getGrandparent(file);
+                                if (grandparent != null) {
+                                    String absolutePath = grandparent.toAbsolutePath().toString();
+                                    localClients.add(new PostgreServerHome(absolutePath, absolutePath, absolutePath));
+                                }
+                            }
+                            return FileVisitResult.SKIP_SIBLINGS;
                         }
-                        return FileVisitResult.SKIP_SIBLINGS;
-                    }
-                });
-            } catch (IOException e) {
-                log.warn(String.format("Unable to examine folder %s while looking for a PostgreSQL client home", folder), e);
+                    });
+                } catch (IOException e) {
+                    log.warn(String.format("Unable to examine folder %s while looking for a PostgreSQL client home", folder), e);
+                }
             }
         }
     }

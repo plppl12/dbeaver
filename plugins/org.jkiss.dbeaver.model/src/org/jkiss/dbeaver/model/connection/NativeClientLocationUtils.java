@@ -16,47 +16,33 @@
  */
 package org.jkiss.dbeaver.model.connection;
 
-import java.io.File;
-import java.io.IOException;
-import java.util.Arrays;
-import java.util.Objects;
-import java.util.stream.Stream;
+import org.jkiss.code.NotNull;
+import org.jkiss.dbeaver.utils.RuntimeUtils;
+
+import java.util.ArrayList;
+import java.util.Collection;
 
 public class NativeClientLocationUtils {
-    public static final String USR_LOCAL = "/usr/local/";
-    public static final String HOMEBREW_FORMULAE_LOCATION = USR_LOCAL + "Cellar/";
-    public static final String BIN = "bin";
-
-    private NativeClientLocationUtils() {}
-
-    public static File[] getSubdirectories(File... dirs) {
-        return getStreamOfSubdirectories(dirs).toArray(File[]::new);
+    private NativeClientLocationUtils() {
+        // No instances for you!
     }
 
-    public static File[] getSubdirectoriesWithNamesStartingWith(String prefix, File... dirs) {
-        return getStreamOfSubdirectories(dirs)
-                .filter(file -> file.getName().startsWith(prefix))
-                .toArray(File[]::new);
-    }
-
-    private static Stream<File> getStreamOfSubdirectories(File... dirs) {
-        if (dirs == null) {
-            return Stream.empty();
+    @NotNull
+    public static Collection<String> unixFoldersToExamine() {
+        Collection<String> foldersToExamine = new ArrayList<>();
+        foldersToExamine.add("/usr/bin");
+        foldersToExamine.add("/usr/local/bin");
+        if (RuntimeUtils.isLinux()) {
+            foldersToExamine.add("/etc/alternatives");
+        } else if (RuntimeUtils.isMacOS()) {
+            if (RuntimeUtils.isOSArchAMD64()) {
+                foldersToExamine.add("/usr/local/Cellar/"); // homebrew on Intel-based macs
+            } else if (RuntimeUtils.isOSArchAArch64()) {
+                foldersToExamine.add("/opt/homebrew/bin");
+                foldersToExamine.add("/opt/homebrew/Cellar");
+                foldersToExamine.add("/opt/homebrew/opt");
+            }
         }
-        return Arrays.stream(dirs)
-                .filter(Objects::nonNull)
-                .map(File::listFiles)
-                .filter(Objects::nonNull)
-                .flatMap(Arrays::stream)
-                .filter(Objects::nonNull)
-                .filter(File::isDirectory);
-    }
-
-    public static String getCanonicalPath(File file) {
-        try {
-            return file.getCanonicalPath();
-        } catch (IOException e) {
-            return "";
-        }
+        return foldersToExamine;
     }
 }

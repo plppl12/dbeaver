@@ -38,7 +38,13 @@ import org.jkiss.utils.StandardConstants;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.sql.Driver;
 import java.util.*;
 
@@ -51,7 +57,8 @@ public class MySQLDataSourceProvider extends JDBCDataSourceProvider implements D
     private static final String INSTALLDIR_KEY = "INSTALLDIR";
     //private static final String SERER_VERSION_KEY = "Version";
 
-    private static Map<String,MySQLServerHome> localServers = null;
+    @Nullable
+    private static Map<String, DBPNativeClientLocation> localClients;
     private static Map<String,String> connectionsProps;
 
     static {
@@ -158,14 +165,14 @@ public class MySQLDataSourceProvider extends JDBCDataSourceProvider implements D
     public List<DBPNativeClientLocation> findLocalClientLocations()
     {
         findLocalClients();
-        return new ArrayList<>(localServers.values());
+        return new ArrayList<>(localClients.values());
     }
 
     @Override
     public DBPNativeClientLocation getDefaultLocalClientLocation()
     {
         findLocalClients();
-        return localServers.isEmpty() ? null : localServers.values().iterator().next();
+        return localClients.isEmpty() ? null : localClients.values().iterator().next();
     }
 
     @Override
@@ -178,18 +185,16 @@ public class MySQLDataSourceProvider extends JDBCDataSourceProvider implements D
         return getFullServerVersion(location.getPath());
     }
 
-    public static MySQLServerHome getServerHome(String homeId)
-    {
+    public static DBPNativeClientLocation getServerHome(String homeId) {
         findLocalClients();
-        MySQLServerHome home = localServers.get(homeId);
-        return home == null ? new MySQLServerHome(homeId, homeId) : home;
+        return localClients.getOrDefault(homeId, new LocalNativeClientLocation(homeId, homeId, homeId));
     }
 
     public synchronized static void findLocalClients() {
-        if (localServers != null) {
+        if (localClients != null) {
             return;
         }
-        localServers = new LinkedHashMap<>();
+        localClients = new LinkedHashMap<>();
         // read from path
         String path = System.getenv("PATH");
         if (path != null && RuntimeUtils.isWindows()) {
@@ -200,7 +205,7 @@ public class MySQLDataSourceProvider extends JDBCDataSourceProvider implements D
                     File binFolder = mysqlFile.getAbsoluteFile().getParentFile();//.getName()
                     if (binFolder.getName().equalsIgnoreCase("bin")) {
                     	String homeId = CommonUtils.removeTrailingSlash(binFolder.getParentFile().getAbsolutePath());
-                        localServers.put(homeId, new MySQLServerHome(homeId, null));
+                        localClients.put(homeId, new LocalNativeClientLocation(homeId, homeId));
                     }
                 }
             }
@@ -220,7 +225,7 @@ public class MySQLDataSourceProvider extends JDBCDataSourceProvider implements D
                                     if (SERER_LOCATION_KEY.equalsIgnoreCase(key)) {
                                         String serverPath = CommonUtils.removeTrailingSlash(CommonUtils.toString(valuesMap.get(key)));
                                         if (new File(serverPath, "bin").exists()) {
-                                            localServers.put(serverPath, new MySQLServerHome(serverPath, homeKey));
+                                            localClients.put(serverPath, new LocalNativeClientLocation(serverPath, homeKey));
                                         }
                                     }
                                 }
@@ -238,7 +243,7 @@ public class MySQLDataSourceProvider extends JDBCDataSourceProvider implements D
                                 if (INSTALLDIR_KEY.equalsIgnoreCase(key)) {
                                     String serverPath = CommonUtils.removeTrailingSlash(CommonUtils.toString(valuesMap.get(key)));
                                     if (new File(serverPath, "bin").exists()) {
-                                        localServers.put(serverPath, new MySQLServerHome(serverPath, homeKey));
+                                        localClients.put(serverPath, new LocalNativeClientLocation(serverPath, homeKey));
                                     }
                                 }
                             }
@@ -248,36 +253,33 @@ public class MySQLDataSourceProvider extends JDBCDataSourceProvider implements D
             } catch (Throwable e) {
                 log.warn("Error reading Windows registry", e);
             }
-        } else if (RuntimeUtils.isMacOS()) {
-            Collection<File> mysqlDirs = new ArrayList<>();
-            Collections.addAll(
-                mysqlDirs,
-                NativeClientLocationUtils.getSubdirectoriesWithNamesStartingWith("mysql", new File(NativeClientLocationUtils.USR_LOCAL)) //clients installed via installer downloaded from mysql site
-            );
-            Collections.addAll(
-                mysqlDirs,
-                NativeClientLocationUtils.getSubdirectories(NativeClientLocationUtils.getSubdirectoriesWithNamesStartingWith("mysql", new File(NativeClientLocationUtils.HOMEBREW_FORMULAE_LOCATION)))
-            );
-            Collections.addAll(
-                mysqlDirs,
-                NativeClientLocationUtils.getSubdirectories(NativeClientLocationUtils.getSubdirectoriesWithNamesStartingWith("mariadb", new File(NativeClientLocationUtils.HOMEBREW_FORMULAE_LOCATION)))
-            );
-            for (File dir: mysqlDirs) {
-                File bin = new File(dir, NativeClientLocationUtils.BIN);
-                File binary = new File(bin, MySQLUtils.getMySQLConsoleBinaryName());
-                if (!bin.exists() || !bin.isDirectory() || !binary.exists() || !binary.canExecute()) {
+        } else {
+            // Unix
+            for (String folder : NativeClientLocationUtils.unixFoldersToExamine()) {
+                Path folderPath = Path.of(folder);
+                if (Files.notExists(folderPath)) {
                     continue;
                 }
-                String version = getFullServerVersion(dir);
-                if (version == null) {
-                    continue;
+                try {
+                    Files.walkFileTree(folderPath, new SimpleFileVisitor<>() {
+                        @Override
+                        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                            if (!file.endsWith("bin/mysql") && !file.endsWith("bin/mariadb")) {
+                                return FileVisitResult.CONTINUE;
+                            }
+                            if (file.toFile().canExecute()) {
+                                Path grandparent = IOUtils.getGrandparent(file);
+                                if (grandparent != null) {
+                                    String id = grandparent.toAbsolutePath().toString();
+                                    localClients.put(id, new LocalNativeClientLocation(id, grandparent.toFile()));
+                                }
+                            }
+                            return FileVisitResult.SKIP_SIBLINGS;
+                        }
+                    });
+                } catch (IOException e) {
+                    log.warn(String.format("Unable to examine folder %s while looking for a MySQL/MariaDB client home", folder), e);
                 }
-                String canonicalPath = NativeClientLocationUtils.getCanonicalPath(dir);
-                if (canonicalPath.isEmpty()) {
-                    continue;
-                }
-                MySQLServerHome home = new MySQLServerHome(canonicalPath, "MySQL " + version);
-                localServers.put(canonicalPath, home);
             }
         }
     }
